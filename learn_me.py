@@ -42,7 +42,20 @@ def fetch_yahoo_data(stock_sym):
 	# print(df.head())
 	return df
 	
+def fetch_indic(stock_sym, indic):	
+	filename = 'data/'+stock_sym+'_' + indic + '.csv'
+	if not os.path.isfile(filename):
+		ti = TechIndicators(key='XNL4', output_format='pandas')
+		if indic == 'sma': 
+			df, meta_data = ti.get_sma(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+			df.to_csv(filename)
+	df = pd.read_csv(filename)
 	
+	df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+	df = df.set_index('date')
+	df = df['2010-01-01':'2017-10-01']
+	print(df.head())
+		
 def fetch_data(stock_sym):
 	filename = 'data/'+stock_sym+'_dailyadj.csv'
 	if os.path.isfile(filename):
@@ -106,28 +119,22 @@ def build_data(stocks, pred_data):
 	print(training_test_data.describe())
 	
 	for i in range(7, len(log_return_data)):
-		val = OrderedDict()
-		val[output_pos] = log_return_data[output_pos].ix[i]
-		val[output_neg] = log_return_data[output_neg].ix[i]
+		training_test_data.loc[i-7,output_pos] = log_return_data[output_pos].ix[i]
+		training_test_data.loc[i-7,output_neg] = log_return_data[output_neg].ix[i]
 		for stock in stocks:
 			for idx in stock.past_idx:
-				val[stock.name + '_' + str(idx)] = log_return_data[stock.name].ix[i-idx]
-		# print(val)
-		training_test_data = training_test_data.append(val,ignore_index=True)
-		print(training_test_data.head())
-	
+				training_test_data.loc[i-7,stock.name + '_' + str(idx)] = log_return_data[stock.name].ix[i-idx]
+
+	training_test_data.reset_index()
 	training_test_data = training_test_data[columns]
-	print(training_test_data.head())
 	return training_test_data
 
+# fetch_indic('MSFT','sma')
 training_test_data = build_data(stocks,'snp')
   
 # Separate in training and test data
 predictors_tf = training_test_data[training_test_data.columns[2:]]
-
 classes_tf = training_test_data[training_test_data.columns[:2]]
-
-print(classes_tf)
 
 training_set_size = int(len(training_test_data) * 0.8)
 test_set_size = len(training_test_data) - training_set_size
