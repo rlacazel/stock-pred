@@ -24,6 +24,15 @@ class Stock:
 	def __str__(self):
 		return self.name + '[' + self.symbol + '] -> idx used: ' +  str(self.past_idx)
 
+class Indic:
+
+	def __init__(self, symbol, name, indics):
+		self.symbol = symbol
+		self.name = name
+		self.indics = indics
+		
+	def __str__(self):
+		return self.name + '[' + self.symbol + '] -> idx used: ' +  str(self.past_idx)
 
 def fetch_yahoo_data(stock_sym):
 	
@@ -48,13 +57,16 @@ def fetch_indic(stock_sym, indic):
 		ti = TechIndicators(key='XNL4', output_format='pandas')
 		if indic == 'sma': 
 			df, meta_data = ti.get_sma(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
-			df.to_csv(filename)
+		elif indic == 'rsi': 
+			df, meta_data = ti.get_rsi(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		df.to_csv(filename)
 	df = pd.read_csv(filename)
 	
 	df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
 	df = df.set_index('date')
 	df = df['2010-01-01':'2017-10-01']
-	print(df.head())
+	# print(df.head())
+	return df
 		
 def fetch_data(stock_sym):
 	filename = 'data/'+stock_sym+'_dailyadj.csv'
@@ -85,22 +97,42 @@ def fetch_data(stock_sym):
 	return df
 	
 
-stocks = [Stock('^GSPC', 'snp', list(range(1,4))), Stock('^NYA', 'nyse', list(range(1,4))), Stock('^DJI', 'djia', list(range(1,4))), Stock('^N225', 'nikkei', list(range(0,3))),
+_stocks_snp = [Stock('^GSPC', 'snp', list(range(1,4))), Stock('^NYA', 'nyse', list(range(1,4))), Stock('^DJI', 'djia', list(range(1,4))), Stock('^N225', 'nikkei', list(range(0,3))),
 			Stock('^HSI', 'hangseng', list(range(0,3))), Stock('^FTSE', 'ftse', list(range(1,3))), Stock('^GDAXI', 'dax', list(range(1,3))), Stock('^AORD', 'aord', list(range(0,3)))]
+_indics_snp = [Indic('^GSPC','snp',['sma'])]
 
-def build_data(stocks, pred_data):
+_stocks_msft = [Stock('MSFT', 'msft', list(range(1,4)))]
+_indics_msft = [Indic('MSFT','msft',['sma','rsi'])]
+
+def build_data(stocks, indics, pred_data):
 	closing_data = pd.DataFrame()
 	log_return_data = pd.DataFrame()
 	
+	# collect data
 	for stock in stocks:
 		d = fetch_data(stock.symbol)
 		closing_data[stock.name] = d['close']
 		
+	for indic in indics:
+		for indic_name in indic.indics:	
+			d = fetch_indic(indic.symbol, indic_name)
+			closing_data[indic.name+'_'+indic_name] = d[indic_name.upper()]
+		
 	closing_data = closing_data.fillna(method='ffill')
 	
+	# normalize data
 	for stock in stocks:
 		log_return_data[stock.name] = np.log(closing_data[stock.name]/closing_data[stock.name].shift())
 		
+	for indic in indics:
+		for indic_name in indic.indics:	
+			# Z-Score normalisation
+			# log_return_data[indic.name+'_'+indic_name] = (closing_data[indic.name+'_'+indic_name] - closing_data[indic.name+'_'+indic_name].mean()) / closing_data[indic.name+'_'+indic_name].std()
+			# tan estimator
+			log_return_data[indic.name+'_'+indic_name] = 0.5*(np.tanh(0.01*(closing_data[indic.name+'_'+indic_name] - closing_data[indic.name+'_'+indic_name].mean())/closing_data[indic.name+'_'+indic_name].std())+1)
+			# print(log_return_data[indic.name+'_'+indic_name])
+			
+	# build output
 	output_pos = pred_data+'_log_return_positive'
 	output_neg = pred_data+'_log_return_negative'
 	log_return_data[output_pos] = 0
@@ -113,10 +145,12 @@ def build_data(stocks, pred_data):
 	for stock in stocks:
 		for idx in stock.past_idx:
 			columns.append(stock.name + '_' + str(idx))
-	print(columns)
+	for indic in indics:
+		for indic_name in indic.indics:	
+			columns.append(indic.name+'_'+indic_name)
 	
 	training_test_data = pd.DataFrame(columns)
-	print(training_test_data.describe())
+	# print(training_test_data.describe())
 	
 	for i in range(7, len(log_return_data)):
 		training_test_data.loc[i-7,output_pos] = log_return_data[output_pos].ix[i]
@@ -124,13 +158,17 @@ def build_data(stocks, pred_data):
 		for stock in stocks:
 			for idx in stock.past_idx:
 				training_test_data.loc[i-7,stock.name + '_' + str(idx)] = log_return_data[stock.name].ix[i-idx]
-
+		for indic in indics:
+			for indic_name in indic.indics:	
+				training_test_data.loc[i-7,indic.name+'_'+indic_name] = log_return_data[indic.name+'_'+indic_name].ix[i-1]
+			
 	training_test_data.reset_index()
 	training_test_data = training_test_data[columns]
+	print(training_test_data.describe())
 	return training_test_data
 
-# fetch_indic('MSFT','sma')
-training_test_data = build_data(stocks,'snp')
+training_test_data = build_data(_stocks_msft, _indics_msft, 'msft')
+# training_test_data = build_data(_stocks_snp, _indics_snp, 'snp')
   
 # Separate in training and test data
 predictors_tf = training_test_data[training_test_data.columns[2:]]
@@ -230,13 +268,13 @@ num_classes = len(training_classes_tf.columns)
 feature_data = tf.placeholder("float", [None, num_predictors])
 actual_classes = tf.placeholder("float", [None, 2])
 
-weights1 = tf.Variable(tf.truncated_normal([len(training_test_data.columns)-2, 50], stddev=0.0001))
-biases1 = tf.Variable(tf.ones([50]))
+weights1 = tf.Variable(tf.truncated_normal([num_predictors, num_predictors*2], stddev=0.0001))
+biases1 = tf.Variable(tf.ones([num_predictors*2]))
 
-weights2 = tf.Variable(tf.truncated_normal([50, 25], stddev=0.0001))
-biases2 = tf.Variable(tf.ones([25]))
+weights2 = tf.Variable(tf.truncated_normal([num_predictors*2, num_predictors], stddev=0.0001))
+biases2 = tf.Variable(tf.ones([num_predictors]))
                      
-weights3 = tf.Variable(tf.truncated_normal([25, 2], stddev=0.0001))
+weights3 = tf.Variable(tf.truncated_normal([num_predictors, 2], stddev=0.0001))
 biases3 = tf.Variable(tf.ones([2]))
 
 hidden_layer_1 = tf.nn.relu(tf.matmul(feature_data, weights1) + biases1)
