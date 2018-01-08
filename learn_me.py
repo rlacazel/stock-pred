@@ -59,6 +59,30 @@ def fetch_indic(stock_sym, indic):
 			df, meta_data = ti.get_sma(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
 		elif indic == 'rsi': 
 			df, meta_data = ti.get_rsi(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		elif indic == 'trix': 
+			df, meta_data = ti.get_trix(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		elif indic == 'adx': 
+			df, meta_data = ti.get_adx(symbol=stock_sym, interval='daily', time_period=20)
+		elif indic == 'adxr': 
+			df, meta_data = ti.get_adxr(symbol=stock_sym, interval='daily', time_period=20)
+		elif indic == 'apo': 
+			df, meta_data = ti.get_apo(symbol=stock_sym, interval='daily', series_type='close')
+		elif indic == 'aroon': 
+			df, meta_data = ti.get_aroon(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		elif indic == 'atr': 
+			df, meta_data = ti.get_atr(symbol=stock_sym, interval='daily', time_period=20)
+		elif indic == 'bbands': 
+			df, meta_data = ti.get_bbands(symbol=stock_sym, interval='daily', time_period=20)
+		elif indic == 'cci': 
+			df, meta_data = ti.get_cci(symbol=stock_sym, interval='daily', time_period=20)
+		elif indic == 'cmo': 
+			df, meta_data = ti.get_cmo(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		elif indic == 'dx': 
+			df, meta_data = ti.get_dx(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		elif indic == 'ema': 
+			df, meta_data = ti.get_ema(symbol=stock_sym, interval='daily', time_period=20, series_type='close')
+		elif indic == 'macd': 
+			df, meta_data = ti.get_macd(symbol=stock_sym, interval='daily', series_type='close')
 		df.to_csv(filename)
 	df = pd.read_csv(filename)
 	
@@ -102,7 +126,7 @@ _stocks_snp = [Stock('^GSPC', 'snp', list(range(1,4))), Stock('^NYA', 'nyse', li
 _indics_snp = [Indic('^GSPC','snp',['sma'])]
 
 _stocks_msft = [Stock('MSFT', 'msft', list(range(1,4)))]
-_indics_msft = [Indic('MSFT','msft',['sma','rsi'])]
+_indics_msft = [Indic('MSFT','msft',['sma','rsi','trix','adx','adxr','apo','atr','cci','cmo','dx','ema','macd'])] # 'aroon','bbands'
 
 def build_data(stocks, indics, pred_data):
 	closing_data = pd.DataFrame()
