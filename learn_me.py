@@ -10,16 +10,17 @@ import os
 from datetime import datetime, date, time
 from collections import OrderedDict
 
-flags = tf.app.flags
-flags.DEFINE_string("stock_symbol", None, "Target stock symbol [None]")
-FLAGS = flags.FLAGS
+#flags = tf.app.flags
+#flags.DEFINE_string("stock_symbol", None, "Target stock symbol [None]")
+#FLAGS = flags.FLAGS
 
 class Stock:
 
-	def __init__(self, symbol, name, past_idx):
+	def __init__(self, symbol, name, past_idx, data=['close']):
 		self.symbol = symbol
 		self.name = name
 		self.past_idx = past_idx
+		self.data = data
 		
 	def __str__(self):
 		return self.name + '[' + self.symbol + '] -> idx used: ' +  str(self.past_idx)
@@ -34,22 +35,22 @@ class Indic:
 	def __str__(self):
 		return self.name + '[' + self.symbol + '] -> idx used: ' +  str(self.past_idx)
 
-def fetch_yahoo_data(stock_sym):
-	
-	df = pdr.get_data_yahoo("^N225", start="2000-01-01", end="2018-12-30")
-		
-	col_list = df.columns.tolist()
-	print(col_list)
-	col_list.remove('Open')
-	col_list.remove('High')
-	col_list.remove('Low') 
-	col_list.remove('Adj Close') 
-	col_list.remove('Volume')
-	
-	# print(col_list)
-	df = df[col_list] #.set_index('Date')
-	# print(df.head())
-	return df
+#def fetch_yahoo_data(stock_sym):
+#	
+#	df = pdr.get_data_yahoo("^N225", start="2000-01-01", end="2018-12-30")
+#		
+#	col_list = df.columns.tolist()
+#	print(col_list)
+#	col_list.remove('Open')
+#	col_list.remove('High')
+#	col_list.remove('Low') 
+#	col_list.remove('Adj Close') 
+#	col_list.remove('Volume')
+#	
+#	# print(col_list)
+#	df = df[col_list] #.set_index('Date')
+#	# print(df.head())
+#	return df
 	
 def fetch_indic(stock_sym, indic):	
 	filename = 'data/'+stock_sym+'_' + indic + '.csv'
@@ -103,20 +104,11 @@ def fetch_data(stock_sym):
 		df = pd.read_csv(filename)
 		
 	col_list = df.columns.tolist()
-	col_list.remove('close')
-	col_list.remove('dividend amount')
-	col_list.remove('split coefficient') 
-	col_list.remove('adjusted close') 
-	col_list.remove('open') 
-	col_list.remove('high') 
-	col_list.remove('low') 
-	col_list.remove('volume') 
-	col_list.append('close')
 	
 	df = df[col_list[1:]].set_index('date')
+	# df = df[[type]]
 	df = df['2010-01-01':'2017-10-01']
 	df = df.loc[df['close'] != 0]
-	# df = df[(datetime.strptime(df['date'], '%Y-%m-%d') > datetime.date(2008, 6, 24)) & (datetime.strptime(df['date'], '%Y-%m-%d') < datetime.date(2010, 6, 24))]
 	# print(df.head())
 	return df
 	
@@ -125,7 +117,7 @@ _stocks_snp = [Stock('^GSPC', 'snp', list(range(1,4))), Stock('^NYA', 'nyse', li
 			Stock('^HSI', 'hangseng', list(range(0,3))), Stock('^FTSE', 'ftse', list(range(1,3))), Stock('^GDAXI', 'dax', list(range(1,3))), Stock('^AORD', 'aord', list(range(0,3)))]
 _indics_snp = [Indic('^GSPC','snp',['sma'])]
 
-_stocks_msft = [Stock('MSFT', 'msft', list(range(1,4)))]
+_stocks_msft = [Stock('MSFT', 'msft', list(range(1,4)), ['close','open'])]
 _indics_msft = [Indic('MSFT','msft',['sma','rsi','trix','adx','adxr','apo','atr','cci','cmo','dx','ema','macd'])] # 'aroon','bbands'
 
 def build_data(stocks, indics, pred_data):
@@ -135,7 +127,8 @@ def build_data(stocks, indics, pred_data):
 	# collect data
 	for stock in stocks:
 		d = fetch_data(stock.symbol)
-		closing_data[stock.name] = d['close']
+		for dta in stock.data:
+			closing_data[stock.name+'_'+dta] = d[dta]
 		
 	for indic in indics:
 		for indic_name in indic.indics:	
@@ -146,7 +139,8 @@ def build_data(stocks, indics, pred_data):
 	
 	# normalize data
 	for stock in stocks:
-		log_return_data[stock.name] = np.log(closing_data[stock.name]/closing_data[stock.name].shift())
+		for dta in stock.data:
+			log_return_data[stock.name+'_'+dta] = np.log(closing_data[stock.name+'_'+dta]/closing_data[stock.name+'_'+dta].shift())
 		
 	for indic in indics:
 		for indic_name in indic.indics:	
@@ -160,15 +154,16 @@ def build_data(stocks, indics, pred_data):
 	output_pos = pred_data+'_log_return_positive'
 	output_neg = pred_data+'_log_return_negative'
 	log_return_data[output_pos] = 0
-	log_return_data.ix[log_return_data[pred_data] >= 0, output_pos] = 1
+	log_return_data.loc[log_return_data[pred_data] >= 0, output_pos] = 1
 	log_return_data[output_neg] = 0
-	log_return_data.ix[log_return_data[pred_data] < 0, output_neg] = 1
+	log_return_data.loc[log_return_data[pred_data] < 0, output_neg] = 1
 	
 	# build data column
 	columns = [output_pos, output_neg]
 	for stock in stocks:
-		for idx in stock.past_idx:
-			columns.append(stock.name + '_' + str(idx))
+		for dta in stock.data:
+			for idx in stock.past_idx:
+				columns.append(stock.name + '_' + dta  + '_' + str(idx))
 	for indic in indics:
 		for indic_name in indic.indics:	
 			columns.append(indic.name+'_'+indic_name)
@@ -177,22 +172,23 @@ def build_data(stocks, indics, pred_data):
 	# print(training_test_data.describe())
 	
 	for i in range(7, len(log_return_data)):
-		training_test_data.loc[i-7,output_pos] = log_return_data[output_pos].ix[i]
-		training_test_data.loc[i-7,output_neg] = log_return_data[output_neg].ix[i]
+		training_test_data.loc[i-7,output_pos] = log_return_data[output_pos].iloc[i]
+		training_test_data.loc[i-7,output_neg] = log_return_data[output_neg].iloc[i]
 		for stock in stocks:
-			for idx in stock.past_idx:
-				training_test_data.loc[i-7,stock.name + '_' + str(idx)] = log_return_data[stock.name].ix[i-idx]
+			for dta in stock.data:
+				for idx in stock.past_idx:
+					training_test_data.loc[i-7,stock.name + '_' + dta  + '_' + str(idx)] = log_return_data[stock.name + '_' + dta].iloc[i-idx]
 		for indic in indics:
 			for indic_name in indic.indics:	
-				training_test_data.loc[i-7,indic.name+'_'+indic_name] = log_return_data[indic.name+'_'+indic_name].ix[i-1]
+				training_test_data.loc[i-7,indic.name+'_'+indic_name] = log_return_data[indic.name+'_'+indic_name].iloc[i-1]
 			
 	training_test_data.reset_index()
 	training_test_data = training_test_data[columns]
 	print(training_test_data.describe())
 	return training_test_data
 
-training_test_data = build_data(_stocks_msft, _indics_msft, 'msft')
-# training_test_data = build_data(_stocks_snp, _indics_snp, 'snp')
+training_test_data = build_data(_stocks_msft, _indics_msft, 'msft_close')
+# training_test_data = build_data(_stocks_snp, _indics_snp, 'snp_close')
   
 # Separate in training and test data
 predictors_tf = training_test_data[training_test_data.columns[2:]]
