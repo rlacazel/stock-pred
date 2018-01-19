@@ -7,7 +7,7 @@ from alpha_vantage.timeseries import TimeSeries
 import os
 import pandas as pd
 from pyalgotrade.technical import ma
-import smacrossover
+import strategies
 
 # TUTO : http://gbeced.github.io/pyalgotrade/docs/v0.18/html/tutorial.html
 
@@ -34,81 +34,43 @@ def fetch_data(stock_sym):
 		# print(df.head())
 		df.to_csv(filename)
 	return filename
-		
-class MyStrategy(strategy.BacktestingStrategy):
-	def __init__(self, feed, instrument, smaPeriod):
-		super(MyStrategy, self).__init__(feed, 1000000)
-		self.__position = None
-		self.__instrument = instrument
-		# We'll use adjusted close values instead of regular close values.
-		self.setUseAdjustedValues(True)
-		self.__sma = ma.SMA(feed[instrument].getPriceDataSeries(), smaPeriod)
 
-	def onEnterOk(self, position):
-		execInfo = position.getEntryOrder().getExecutionInfo()
-		self.info("BUY at $%.2f" % (execInfo.getPrice()))
+def run(strategy):
 
-	def onEnterCanceled(self, position):
-		self.__position = None
+	initial_capital = strategy.getResult()
+	
+	# Attach a returns analyzers to the strategy.
+	returnsAnalyzer = returns.Returns()
+	strategy.attachAnalyzer(returnsAnalyzer)
 
-	def onExitOk(self, position):
-		execInfo = position.getExitOrder().getExecutionInfo()
-		self.info("SELL at $%.2f" % (execInfo.getPrice()))
-		self.__position = None
+	# Attach the plotter to the strategy.
+	plt = plotter.StrategyPlotter(strategy)
+	# Include the SMA in the instrument's subplot to get it displayed along with the closing prices.
+	# plt.getInstrumentSubplot("data").addDataSeries("SMA", strategy.getSMA())
+	
+	# Plot the simple returns on each bar.
+	plt.getOrCreateSubplot("returns").addDataSeries("Simple returns", returnsAnalyzer.getReturns())
 
-	def onExitCanceled(self, position):
-		# If the exit was canceled, re-submit it.
-		self.__position.exitMarket()
-
-	def onBars(self, bars):
-		# Wait for enough bars to be available to calculate a SMA.
-		if self.__sma[-1] is None:
-			return
-
-		bar = bars[self.__instrument]
-		# If a position was not opened, check if we should enter a long position.
-		if self.__position is None:
-			if bar.getPrice() > self.__sma[-1]:
-				# Enter a buy market order for 10 shares. The order is good till canceled.
-				self.__position = self.enterLong(self.__instrument, 10, True)
-		# Check if we have to exit the position.
-		elif bar.getPrice() < self.__sma[-1] and not self.__position.exitActive():
-			self.__position.exitMarket()
-
-def run_strategy(smaPeriod):
-	# Load the yahoo feed from the CSV file
-	feed = yahoofeed.Feed()
-	file = fetch_data('^GSPC')
-	feed.addBarsFromCSV("data", file)
-
-	# Evaluate the strategy with the feed.
-	myStrategy = MyStrategy(feed, "data", smaPeriod)
-	myStrategy.run()
-	print("Final portfolio value: $%.2f" % myStrategy.getBroker().getEquity())
-
-# run_strategy(15)
-
+	# Run the strategy.
+	strategy.run()
+	percent_return = (strategy.getResult() - initial_capital) / initial_capital * 100
+	strategy.info("Final portfolio value: $%.2f (tot return: %.2f%%) (daily return: %.3f%%)" % (strategy.getResult(), percent_return, percent_return / strategy._count))
+	print(strategy._count)
+	
+	# Plot the strategy.
+	plt.plot()
+	
 feed = yahoofeed.Feed()
 file = fetch_data('MSFT')
 feed.addBarsFromCSV("data", file)
 	
 # Evaluate the strategy with the feed's bars.
-myStrategy = smacrossover.SMACrossOver(feed, "data", 20)
+sma = strategies.SMACrossOver(feed, "data", 20)
 
-# Attach a returns analyzers to the strategy.
-returnsAnalyzer = returns.Returns()
-myStrategy.attachAnalyzer(returnsAnalyzer)
+feed = yahoofeed.Feed()
+feed.addBarsFromCSV("data", file)
 
-# Attach the plotter to the strategy.
-plt = plotter.StrategyPlotter(myStrategy)
-# Include the SMA in the instrument's subplot to get it displayed along with the closing prices.
-plt.getInstrumentSubplot("data").addDataSeries("SMA", myStrategy.getSMA())
-# Plot the simple returns on each bar.
-plt.getOrCreateSubplot("returns").addDataSeries("Simple returns", returnsAnalyzer.getReturns())
+rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18)
 
-# Run the strategy.
-myStrategy.run()
-myStrategy.info("Final portfolio value: $%.2f" % myStrategy.getResult())
-
-# Plot the strategy.
-plt.plot()
+run(sma)
+# run(rsi2)
