@@ -1,4 +1,4 @@
-from pyalgotrade import strategy
+from pyalgotrade import strategy, broker
 from pyalgotrade.barfeed import yahoofeed
 from toolz import merge
 from alpha_vantage.timeseries import TimeSeries
@@ -7,17 +7,34 @@ import pandas as pd
 from pyalgotrade.technical import ma
 from pyalgotrade.technical import rsi
 from pyalgotrade.technical import cross
+import datetime
+
+def getStrOrder(order):
+	if order == 1:
+		return 'buy'
+	elif order == 2:
+		return 'buy_to_cover'
+	if order == 3:
+		return 'sell'
+	elif order == 4:
+		return 'sell_to_cover'
+	else:
+		return 'undefined'
+
 
 class SMACrossOver(strategy.BacktestingStrategy):
-	def __init__(self, feed, instrument, smaPeriod):
+	def __init__(self, feed, instrument, smaPeriod, lastDayOrder = False, has_a_position = False):
 		super(SMACrossOver, self).__init__(feed)
 		self.__instrument = instrument
-		self.__position = None
+		self.__position = None if not has_a_position else self.enterLong(self.__instrument, 1, True)
 		# We'll use adjusted close values instead of regular close values.
 		self.setUseAdjustedValues(True)
 		self.__prices = feed[instrument].getPriceDataSeries()
 		self.__sma = ma.SMA(self.__prices, smaPeriod)
 		self._count = 0
+		self._lastDayOrder = lastDayOrder
+		self._init_price = None
+		self._last_price = None
 
 	def getSMA(self):
 		return self.__sma
@@ -32,9 +49,16 @@ class SMACrossOver(strategy.BacktestingStrategy):
 		# If the exit was canceled, re-submit it.
 		self.__position.exitMarket()
 
+	def getChangePrice(self):
+		return (self._last_price - self._init_price) / self._init_price * 100
+		
 	def onBars(self, bars):
-		if self.__sma[-1] is None:
+		if self.__sma[-1] is None or (self._lastDayOrder and not self.getFeed().eof()):
 			return
+		if self._init_price is None:
+			self._init_price = bars[self.__instrument].getPrice()
+		elif self.getFeed().eof():
+			self._last_price = bars[self.__instrument].getPrice()
 			
 		self._count = self._count + 1
 		# If a position was not opened, check if we should enter a long position.
@@ -47,6 +71,11 @@ class SMACrossOver(strategy.BacktestingStrategy):
 		# Check if we have to exit the position.
 		elif not self.__position.exitActive() and cross.cross_below(self.__prices, self.__sma) > 0:
 			self.__position.exitMarket()
+			# print("SELL on %s" % bars[self.__instrument].getDateTime())		
+			
+		if self.__position is not None and self._lastDayOrder and self.getFeed().eof():
+			for order in self.__position.getActiveOrders():
+				print(str(bars.getDateTime().date()) + '->' + order.getInstrument() + ': ' + getStrOrder(order.getAction()))
 
 			
 class RSI2(strategy.BacktestingStrategy):
