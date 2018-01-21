@@ -58,7 +58,7 @@ def run(strategy, symbol, plot = False):
 	# Run the strategy.
 	strategy.run()
 	percent_return = (strategy.getResult() - initial_capital) / initial_capital * 100
-	strategy.info("Final %4s value: $%.2f (tot return: %.2f%% / price : %.2f%%) (daily return: %.3f%%)" % (symbol, strategy.getResult(), percent_return, strategy.getChangePrice(), percent_return / strategy._count))
+	strategy.info("Final %4s value: $%.2f (tot return: %.2f%% / price : %.2f%%)" % (symbol, strategy.getResult(), percent_return, strategy.getChangePrice())) # daily return : percent_return / strategy._count)
 	# print(strategy._count)
 	
 	# Plot the strategy.
@@ -66,22 +66,30 @@ def run(strategy, symbol, plot = False):
 		plt.plot()
 	
 feed = yahoofeed.Feed()
-file = fetch_data('AAP')
+file = fetch_data('AAPL')
 feed.addBarsFromCSV("data", file)
 	
-# sma = strategies.SMACrossOver(feed, "data", 20, False, strategies.EntryType.Nothing) # , True, True
-# run(sma, 'data', True)
+sma = strategies.SMACrossOver(feed, "data", 20, False, strategies.EntryType.Nothing) # , True, True
+run(sma, 'data', False)
 # sma.run()
 	
-# feed = yahoofeed.Feed()
-# feed.addBarsFromCSV("data", file)
+feed = yahoofeed.Feed()
+feed.addBarsFromCSV("data", file)
 
 rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18, False, strategies.EntryType.Nothing)
-run(rsi2, 'data', True)
+run(rsi2, 'data', False)
 # rsi2.run()
 
-# run(sma)
-# run(rsi2)
+d1 = sma._actions.set_index('date')
+d2 = rsi2._actions.set_index('date')
+d = pd.concat([d1, d2], axis=1)
+# print(d)
+
+feed = yahoofeed.Feed()
+feed.addBarsFromCSV("data", file)
+dual = strategies.SMAandRSI2(feed, "data", d)
+run(dual, 'data', False)
+dual.run()
 
 # for s in list_symbols:
 	# feed = yahoofeed.Feed()
@@ -92,4 +100,6 @@ run(rsi2, 'data', True)
 		# continue
 	# feed.addBarsFromCSV(s, file)
 	# sma = strategies.SMACrossOver(feed, s, 20) # , True, True
+	# rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18) # , True, True
+	# run(sma, s)
 	# run(sma, s)
