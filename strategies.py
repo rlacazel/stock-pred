@@ -8,7 +8,13 @@ from pyalgotrade.technical import ma
 from pyalgotrade.technical import rsi
 from pyalgotrade.technical import cross
 import datetime
+import enum
 
+class EntryType(enum.Enum):
+    Nothing = 0
+    Short = 1
+    Long = 2
+	
 def getStrOrder(order):
 	if order == 1:
 		return 'buy'
@@ -17,30 +23,64 @@ def getStrOrder(order):
 	if order == 3:
 		return 'sell'
 	elif order == 4:
-		return 'sell_to_cover'
+		return 'sell_short'
 	else:
 		return 'undefined'
 
-
-class SMACrossOver(strategy.BacktestingStrategy):
-	def __init__(self, feed, instrument, smaPeriod, lastDayOrder = False, has_a_position = False):
-		super(SMACrossOver, self).__init__(feed)
-		self.__instrument = instrument
-		self.__position = None if not has_a_position else self.enterLong(self.__instrument, 1, True)
-		# We'll use adjusted close values instead of regular close values.
-		self.setUseAdjustedValues(True)
-		self.__prices = feed[instrument].getPriceDataSeries()
-		self.__sma = ma.SMA(self.__prices, smaPeriod)
-		self._count = 0
-		self._lastDayOrder = lastDayOrder
+class BaseStrategy(strategy.BacktestingStrategy):
+	def __init__(self, feed, instrument, lastDayOrder):
+		super(BaseStrategy, self).__init__(feed)
 		self._init_price = None
 		self._last_price = None
+		self._instrument = instrument
+		self._lastDayOrder = lastDayOrder
+		self._count = 0
+		if feed.barsHaveAdjClose():
+			self.setUseAdjustedValues(True)
+	
+	def updateVarContext(self, bars):
+		self._count = self._count + 1
+		if self._init_price is None:
+			self._init_price = bars[self._instrument].getPrice()
+		elif self.getFeed().eof():
+			self._last_price = bars[self._instrument].getPrice()
+	
+	def displayActionIfLastDay(self, bars):
+		if self._lastDayOrder and self.getFeed().eof():
+			for pos in filter(lambda x: x is not None, self.getPositions()):
+				for order in pos.getActiveOrders():
+					print(str(bars.getDateTime().date()) + '->' + order.getInstrument() + ': ' + getStrOrder(order.getAction()))
+			
+	def getPositions(self):
+		raise NotImplementedError("Must override getPositions")
+		
+	def getChangePrice(self):
+		return (self._last_price - self._init_price) / self._init_price * 100	
+
+	def strategies(self, bars):
+		raise NotImplementedError("Must override strategies")
+	
+	def onBars(self, bars):
+		# Wait for enough bars to be available to calculate SMA and RSI.
+		if not(self.availableData()) or (self._lastDayOrder and not self.getFeed().eof()): return
+		self.updateVarContext(bars)
+
+		self.strategies(bars)
+		
+		self.displayActionIfLastDay(bars)
+	
+class SMACrossOver(BaseStrategy):
+	def __init__(self, feed, instrument, smaPeriod, lastDayOrder = False, entryType = EntryType.Nothing):
+		super(SMACrossOver, self).__init__(feed, instrument, lastDayOrder)
+		self.__position = self.enterLong(instrument, 1, True) if entryType == EntryType.Long else None
+		self.__prices = feed[instrument].getPriceDataSeries()
+		self.__sma = ma.SMA(self.__prices, smaPeriod)
 
 	def getSMA(self):
 		return self.__sma
 
 	def onEnterCanceled(self, position):
-		self.__position = None
+		self._position = None
 
 	def onExitOk(self, position):
 		self.__position = None
@@ -49,51 +89,37 @@ class SMACrossOver(strategy.BacktestingStrategy):
 		# If the exit was canceled, re-submit it.
 		self.__position.exitMarket()
 
-	def getChangePrice(self):
-		return (self._last_price - self._init_price) / self._init_price * 100
+	def availableData(self):
+		return self.__sma[-1] is not None
 		
-	def onBars(self, bars):
-		if self.__sma[-1] is None or (self._lastDayOrder and not self.getFeed().eof()):
-			return
-		if self._init_price is None:
-			self._init_price = bars[self.__instrument].getPrice()
-		elif self.getFeed().eof():
-			self._last_price = bars[self.__instrument].getPrice()
-			
-		self._count = self._count + 1
+	def getPositions(self):
+		return [self.__position]
+		
+	def strategies(self, bars):
 		# If a position was not opened, check if we should enter a long position.
 		if self.__position is None:
 			if cross.cross_above(self.__prices, self.__sma) > 0:
-				shares = int(self.getBroker().getCash() * 0.9 / bars[self.__instrument].getPrice())
+				shares = int(self.getBroker().getCash() * 0.9 / bars[self._instrument].getPrice())
 				# Enter a buy market order. The order is good till canceled.
-				self.__position = self.enterLong(self.__instrument, shares, True)
-				# print("BUY on %s" % bars[self.__instrument].getDateTime())		
+				self.__position = self.enterLong(self._instrument, shares, True)
+				# print("BUY on %s" % bars[self._instrument].getDateTime())		
 		# Check if we have to exit the position.
 		elif not self.__position.exitActive() and cross.cross_below(self.__prices, self.__sma) > 0:
 			self.__position.exitMarket()
-			# print("SELL on %s" % bars[self.__instrument].getDateTime())		
-			
-		if self.__position is not None and self._lastDayOrder and self.getFeed().eof():
-			for order in self.__position.getActiveOrders():
-				print(str(bars.getDateTime().date()) + '->' + order.getInstrument() + ': ' + getStrOrder(order.getAction()))
+			# print("SELL on %s" % bars[self._instrument].getDateTime())		
 
 			
-class RSI2(strategy.BacktestingStrategy):
-	def __init__(self, feed, instrument, entrySMA, exitSMA, rsiPeriod, overBoughtThreshold, overSoldThreshold):
-		super(RSI2, self).__init__(feed)
-		self.__instrument = instrument
-		# We'll use adjusted close values, if available, instead of regular close values.
-		if feed.barsHaveAdjClose():
-			self.setUseAdjustedValues(True)
+class RSI2(BaseStrategy):
+	def __init__(self, feed, instrument, entrySMA, exitSMA, rsiPeriod, overBoughtThreshold, overSoldThreshold, lastDayOrder = False, entryType = EntryType.Nothing):
+		super(RSI2, self).__init__(feed, instrument, lastDayOrder)
 		self.__priceDS = feed[instrument].getPriceDataSeries()
 		self.__entrySMA = ma.SMA(self.__priceDS, entrySMA)
 		self.__exitSMA = ma.SMA(self.__priceDS, exitSMA)
 		self.__rsi = rsi.RSI(self.__priceDS, rsiPeriod)
 		self.__overBoughtThreshold = overBoughtThreshold
 		self.__overSoldThreshold = overSoldThreshold
-		self.__longPos = None
-		self.__shortPos = None
-		self._count = 0
+		self.__longPos = self.enterLong(instrument, 1, True) if entryType == EntryType.Long else None
+		self.__shortPos = self.enterShort(instrument, 1, True) if entryType == EntryType.Short else None
 
 	def getEntrySMA(self):
 		return self.__entrySMA
@@ -123,14 +149,15 @@ class RSI2(strategy.BacktestingStrategy):
 	def onExitCanceled(self, position):
 		# If the exit was canceled, re-submit it.
 		position.exitMarket()
-
-	def onBars(self, bars):
-		# Wait for enough bars to be available to calculate SMA and RSI.
-		if self.__exitSMA[-1] is None or self.__entrySMA[-1] is None or self.__rsi[-1] is None:
-			return
-
-		self._count = self._count + 1
-		bar = bars[self.__instrument]
+		
+	def availableData(self):
+		return self.__exitSMA[-1] is not None and self.__entrySMA[-1] is not None and self.__rsi[-1] is not None
+		
+	def getPositions(self):
+		return [self.__shortPos, self.__longPos]
+				
+	def strategies(self, bars):
+		bar = bars[self._instrument]
 		if self.__longPos is not None:
 			if self.exitLongSignal():
 				self.__longPos.exitMarket()
@@ -139,12 +166,12 @@ class RSI2(strategy.BacktestingStrategy):
 				self.__shortPos.exitMarket()
 		else:
 			if self.enterLongSignal(bar):
-				shares = int(self.getBroker().getCash() * 0.9 / bars[self.__instrument].getPrice())
-				self.__longPos = self.enterLong(self.__instrument, shares, True)
+				shares = int(self.getBroker().getCash() * 0.9 / bars[self._instrument].getPrice())
+				self.__longPos = self.enterLong(self._instrument, shares, True)
 			elif self.enterShortSignal(bar):
-				shares = int(self.getBroker().getCash() * 0.9 / bars[self.__instrument].getPrice())
-				self.__shortPos = self.enterShort(self.__instrument, shares, True)
-
+				shares = int(self.getBroker().getCash() * 0.9 / bars[self._instrument].getPrice())
+				self.__shortPos = self.enterShort(self._instrument, shares, True)
+		
 	def enterLongSignal(self, bar):
 		return bar.getPrice() > self.__entrySMA[-1] and self.__rsi[-1] <= self.__overSoldThreshold
 

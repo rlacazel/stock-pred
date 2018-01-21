@@ -65,29 +65,31 @@ def run(strategy, symbol, plot = False):
 	if plot: 
 		plt.plot()
 	
-# feed = yahoofeed.Feed()
-# file = fetch_data('AAP')
-# feed.addBarsFromCSV("data", file)
+feed = yahoofeed.Feed()
+file = fetch_data('AAP')
+feed.addBarsFromCSV("data", file)
 	
-# sma = strategies.SMACrossOver(feed, "data", 20) # , True, True
+# sma = strategies.SMACrossOver(feed, "data", 20, False, strategies.EntryType.Nothing) # , True, True
 # run(sma, 'data', True)
 # sma.run()
 	
 # feed = yahoofeed.Feed()
 # feed.addBarsFromCSV("data", file)
 
-# rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18)
+rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18, False, strategies.EntryType.Nothing)
+run(rsi2, 'data', True)
+# rsi2.run()
 
 # run(sma)
 # run(rsi2)
 
-for s in list_symbols:
-	feed = yahoofeed.Feed()
-	try:
-		file = fetch_data(s)
-	except:
-		print("Failed to fetch : %s", s)
-		continue
-	feed.addBarsFromCSV(s, file)
-	sma = strategies.SMACrossOver(feed, s, 20) # , True, True
-	run(sma, s)
+# for s in list_symbols:
+	# feed = yahoofeed.Feed()
+	# try:
+		# file = fetch_data(s)
+	# except:
+		# print("Failed to fetch : %s", s)
+		# continue
+	# feed.addBarsFromCSV(s, file)
+	# sma = strategies.SMACrossOver(feed, s, 20) # , True, True
+	# run(sma, s)
