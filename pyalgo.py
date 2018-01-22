@@ -52,12 +52,17 @@ def run(strategy, symbol, plot = False):
 		strategy.attachAnalyzer(returnsAnalyzer)
 
 		# Attach the plotter to the strategy.
-		plt = plotter.StrategyPlotter(strategy)
+		# plt = plotter.StrategyPlotter(strategy)
+		plt = plotter.StrategyPlotter(strategy, True, True, True)
 		# Include the SMA in the instrument's subplot to get it displayed along with the closing prices.
 		# plt.getInstrumentSubplot("data").addDataSeries("SMA", strategy.getSMA())
 		
 		# Plot the simple returns on each bar.
 		plt.getOrCreateSubplot("returns").addDataSeries("Simple returns", returnsAnalyzer.getReturns())
+		
+		plt.getInstrumentSubplot(symbol).addDataSeries("upper", strategy.getBollingerBands().getUpperBand())
+		plt.getInstrumentSubplot(symbol).addDataSeries("middle", strategy.getBollingerBands().getMiddleBand())
+		plt.getInstrumentSubplot(symbol).addDataSeries("lower", strategy.getBollingerBands().getLowerBand())
 
 	# Run the strategy.
 	strategy.run()
@@ -78,23 +83,23 @@ feed = yahoofeed.Feed()
 file = fetch_data('AAP')
 feed.addBarsFromCSV("data", file)
 	
-# bb = strategies.BBands(feed, "data", 40) # , True, True
-# run(bb, 'data', False)
+bb = strategies.BBands(feed, "data", 40) # , True, True
+run(bb, 'data', True)
 # sma.run()
 		
 # feed = yahoofeed.Feed()
 # file = fetch_data('AAPL')
 # feed.addBarsFromCSV("data", file)
 	
-# sma = strategies.SMACrossOver(feed, "data", 20, False, strategies.EntryType.Nothing) # , True, True
+# sma = strategies.SMACrossOver(feed, "data", 20, False, strategies.PredictionFromType.Nothing) # , True, True
 # run(sma, 'data', True)
 # sma.run()
 	
 # feed = yahoofeed.Feed()
 # feed.addBarsFromCSV("data", file)
 
-rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18, False, strategies.EntryType.Nothing)
-run(rsi2, 'data', True)
+# rsi2 = strategies.RSI2(feed, "data", 154, 5, 2, 91, 18)
+# run(rsi2, 'data', True)
 # rsi2.run()
 
 # d1 = sma._actions.set_index('date')

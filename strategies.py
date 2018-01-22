@@ -12,10 +12,11 @@ from pyalgotrade.technical import bollinger
 import datetime
 import enum
 
-class EntryType(enum.Enum):
-	Nothing = 0
-	Short = 1
-	Long = 2
+class PredictionFromType(enum.Enum):
+	NoPred = 0
+	Nothing = 1
+	Short = 2
+	Long = 3
 
 def codeFromOrder(order, shares):
 	if order == 1 and shares == 0:
@@ -38,26 +39,41 @@ def getStrOrder(order, shares):
 		return 'undefined'
 
 class BaseStrategy(strategy.BacktestingStrategy):
-	def __init__(self, feed, instrument, lastDayOrder = False, entryType = EntryType.Nothing):
+	def __init__(self, feed, instrument, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(BaseStrategy, self).__init__(feed)
+		if feed.barsHaveAdjClose():
+			self.setUseAdjustedValues(True)
 		self._init_price = None
 		self._last_price = None
 		self._instrument = instrument
-		self._lastDayOrder = lastDayOrder
 		self._count = 0
-		if entryType != EntryType.Nothing:
-			self.marketOrder(self._instrument, 1 if EntryType.Long else -1)
-		# self._longPos = self.enterLong(instrument, 1, True) if entryType == EntryType.Long else None
-		# self._shortPos = self.enterShort(instrument, 1, True) if entryType == EntryType.Short else None
+		self.entryTypeWhenAskPrediction = entryTypeWhenAskPrediction
+		if entryTypeWhenAskPrediction == PredictionFromType.Short:
+			self.marketOrder(self._instrument, -1)
+		elif entryTypeWhenAskPrediction == PredictionFromType.Long:
+			self.marketOrder(self._instrument, 1)
 		d =  pd.DataFrame(columns=['date'], dtype=datetime.date)
 		v =  pd.DataFrame(columns=[self.__class__.__name__], dtype=int)
 		self._actions = pd.concat([d, v], axis=1)
-		if feed.barsHaveAdjClose():
-			self.setUseAdjustedValues(True)
+		self._onGoingAcceptedOrder = dict()
 	
 	def onOrderUpdated(self, position):
+		# print(position.getId())
 		shares = self.getBroker().getShares(self._instrument)
-		print(getStrOrder(position.getAction(), shares))
+		date = position.getSubmitDateTime().date() if position.getSubmitDateTime() is not None else None
+		if position.isAccepted() and date is not None:
+			for order in self.getBroker().getActiveOrders(self._instrument):
+				if order.getSubmitDateTime().date() < date:
+					self._onGoingAcceptedOrder[order.getId()] = str(date)
+					self.getBroker().cancelOrder(order)
+			self._onGoingAcceptedOrder[position.getId()] = str(date) + ' -> ' + getStrOrder(position.getAction(), shares)
+			print('Accepted  [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
+		elif position.isFilled() and position.getId() in self._onGoingAcceptedOrder:
+			print('Activated [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
+			self._actions.loc[len(self._actions)] = [date,codeFromOrder(position.getAction(), shares)]  
+		elif position.isCanceled() and position.getId() in self._onGoingAcceptedOrder:
+			print('Cancelled [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
+			# raise Exception('MarketOrder cancelled')
 
 	def onExitCanceled(self, position):
 		# If the exit was canceled, re-submit it.
@@ -69,22 +85,13 @@ class BaseStrategy(strategy.BacktestingStrategy):
 			self._init_price = bars[self._instrument].getPrice()
 		elif self.getFeed().eof():
 			self._last_price = bars[self._instrument].getPrice()
+		self._actions.loc[len(self._actions)] = [bars.getDateTime().date(), 0 if self._actions.empty else self._actions.loc[len(self._actions)-1][1]]
 	
 	def onFinish(self, bars):
-		print("FINISH: " + str(bars.getDateTime().date()))
-	
-	def displayActionIfLastDay(self, bars):
-		has_order_update = False
 		shares = self.getBroker().getShares(self._instrument)
-		# for pos in filter(lambda x: x is not None, [self._longPos, self._shortPos]):
-		for order in self.getBroker().getActiveOrders(self._instrument):
-			# print(getStrOrder(order.getAction(), shares))
-			if self._lastDayOrder and self.getFeed().eof():
+		if self.entryTypeWhenAskPrediction != PredictionFromType.NoPred:
+			for order in self.getBroker().getActiveOrders(self._instrument):
 				print(str(bars.getDateTime().date()) + '->' + order.getInstrument() + ': ' + getStrOrder(order.getAction(), shares))	
-			has_order_update = True
-			self._actions.loc[len(self._actions)] = [bars.getDateTime().date(),codeFromOrder(order.getAction(), shares)]  
-		if not has_order_update:
-			self._actions.loc[len(self._actions)] = [bars.getDateTime().date(), 0 if self._actions.empty else self._actions.loc[len(self._actions)-1][1]]
 		
 	def getChangePrice(self):
 		return (self._last_price - self._init_price) / self._init_price * 100	
@@ -97,16 +104,13 @@ class BaseStrategy(strategy.BacktestingStrategy):
 	
 	def onBars(self, bars):
 		# Wait for enough bars to be available to calculate SMA and RSI.
-		if not(self.availableData()) or (self._lastDayOrder and not self.getFeed().eof()): return
+		if not(self.availableData()) or (self.entryTypeWhenAskPrediction != PredictionFromType.NoPred and not self.getFeed().eof()): return
 		self.updateVarContext(bars)
-
 		self.strategies(bars)
-		
-		self.displayActionIfLastDay(bars)
 
 class SMAandRSI2(BaseStrategy):
-	def __init__(self, feed, instrument, orders, lastDayOrder = False, entryType = EntryType.Nothing):
-		super(SMAandRSI2, self).__init__(feed, instrument, lastDayOrder, entryType)
+	def __init__(self, feed, instrument, orders, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+		super(SMAandRSI2, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__prices = feed[instrument].getPriceDataSeries()
 		self.__orders = orders
 
@@ -123,22 +127,23 @@ class SMAandRSI2(BaseStrategy):
 			if self._longPos is not None:
 				if nb_buy_signal <= 0 and not self._longPos.exitActive() :
 					self._longPos.exitMarket()
-					# print("LEAVE on %s" % bars[self._instrument].getDateTime())		
 			elif self._shortPos is not None:
 				if nb_sell_signal <= 0 and not self._shortPos.exitActive() :
 					self._shortPos.exitMarket()
 			else:
 				if nb_buy_signal > 1:
 					self._longPos = self.enterLong(self._instrument, self.getNbSharesToTake(bars), True)
-					# print("BUY on %s" % bars[self._instrument].getDateTime())		
 				elif nb_sell_signal > 1:
 					self._shortPos = self.enterShort(self._instrument, self.getNbSharesToTake(bars), True)
 
 class BBands(BaseStrategy):
-	def __init__(self, feed, instrument, bBandsPeriod, lastDayOrder = False, entryType = EntryType.Nothing):
-		super(BBands, self).__init__(feed, instrument, lastDayOrder, entryType)
+	def __init__(self, feed, instrument, bBandsPeriod, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+		super(BBands, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__bbands = bollinger.BollingerBands(feed[instrument].getCloseDataSeries(), bBandsPeriod, 2)
 
+	def getBollingerBands(self):
+		return self.__bbands
+		
 	def availableData(self):
 		return self.__bbands.getUpperBand()[-1] is not None
 		
@@ -149,15 +154,16 @@ class BBands(BaseStrategy):
 		shares = self.getBroker().getShares(self._instrument)
 		bar = bars[self._instrument]
 		if shares == 0 and bar.getClose() < lower:
-			sharesToBuy = int(self.getBroker().getCash(False) / bar.getClose())
-			self.marketOrder(self._instrument, sharesToBuy)
+			shareToBuy = self.getNbSharesToTake(bars)
+			self.marketOrder(self._instrument, shareToBuy)
+			self.stopOrder(self._instrument, bar.getClose()-5, -shareToBuy, True)
 		elif shares > 0 and bar.getClose() > upper:
 			self.marketOrder(self._instrument, -1*shares)	
 			
 			
 class SMACrossOver(BaseStrategy):
-	def __init__(self, feed, instrument, smaPeriod, lastDayOrder = False, entryType = EntryType.Nothing):
-		super(SMACrossOver, self).__init__(feed, instrument, lastDayOrder, entryType)
+	def __init__(self, feed, instrument, smaPeriod, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+		super(SMACrossOver, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__prices = feed[instrument].getPriceDataSeries()
 		self.__sma = ma.SMA(self.__prices, smaPeriod)
 
@@ -168,14 +174,6 @@ class SMACrossOver(BaseStrategy):
 		return self.__sma[-1] is not None
 		
 	def strategies(self, bars):
-		# If a position was not opened, check if we should enter a long position.
-		# if self._longPos is None:
-			# if cross.cross_above(self.__prices, self.__sma) > 0:
-				# self._longPos = self.enterLong(self._instrument, self.getNbSharesToTake(bars), True)
-				# print("BUY on %s" % bars[self._instrument].getDateTime())		
-		# elif not self._longPos.exitActive() and cross.cross_below(self.__prices, self.__sma) > 0:
-			# self._longPos.exitMarket()
-			# print("SELL on %s" % bars[self._instrument].getDateTime())	
 		shares = self.getBroker().getShares(self._instrument)
 		if shares == 0 and cross.cross_above(self.__prices, self.__sma) > 0:
 			self.marketOrder(self._instrument, self.getNbSharesToTake(bars))
@@ -184,8 +182,8 @@ class SMACrossOver(BaseStrategy):
 
 			
 class RSI2(BaseStrategy):
-	def __init__(self, feed, instrument, entrySMA, exitSMA, rsiPeriod, overBoughtThreshold, overSoldThreshold, lastDayOrder = False, entryType = EntryType.Nothing):
-		super(RSI2, self).__init__(feed, instrument, lastDayOrder, entryType)
+	def __init__(self, feed, instrument, entrySMA, exitSMA, rsiPeriod, overBoughtThreshold, overSoldThreshold, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+		super(RSI2, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__priceDS = feed[instrument].getPriceDataSeries()
 		self.__entrySMA = ma.SMA(self.__priceDS, entrySMA)
 		self.__exitSMA = ma.SMA(self.__priceDS, exitSMA)
@@ -207,36 +205,17 @@ class RSI2(BaseStrategy):
 				
 	def strategies(self, bars):
 		bar = bars[self._instrument]
-		# if self._longPos is not None:
-			# if self.exitLongSignal():
-				# self._longPos.exitMarket()
-				# print("Sell on %s" % bars[self._instrument].getDateTime())	
-		# elif self._shortPos is not None:
-			# if self.exitShortSignal():
-				# self._shortPos.exitMarket()
-				# print("Sell short on %s" % bars[self._instrument].getDateTime())	
-		# else:
-			# if self.enterLongSignal(bar):
-				# self._longPos = self.enterLong(self._instrument, self.getNbSharesToTake(bars), True)
-				# print("BUY on %s" % bars[self._instrument].getDateTime())	
-			# elif self.enterShortSignal(bar):
-				# self._shortPos = self.enterShort(self._instrument, self.getNbSharesToTake(bars), True)
-				# print("BUY Short on %s" % bars[self._instrument].getDateTime())	
 	
 		shares = self.getBroker().getShares(self._instrument)
 		if shares > 0 and self.exitLongSignal():
 			self.marketOrder(self._instrument, -shares)
-			# print("Sell on %s" % bars[self._instrument].getDateTime())
 		elif shares < 0 and self.exitShortSignal():
 			self.marketOrder(self._instrument, -shares) # need pos value but its minus by minus equal plus
-			# print("Sell short on %s" % bars[self._instrument].getDateTime())
 		elif shares == 0:
 			if self.enterLongSignal(bar):
 				self.marketOrder(self._instrument, self.getNbSharesToTake(bars))
-				# print("BUY on %s" % bars[self._instrument].getDateTime())
 			elif self.enterShortSignal(bar):
 				self.marketOrder(self._instrument, -self.getNbSharesToTake(bars))
-				# print("BUY Short %s" % bars[self._instrument].getDateTime())
 		
 	def enterLongSignal(self, bar):
 		return bar.getPrice() > self.__entrySMA[-1] and self.__rsi[-1] <= self.__overSoldThreshold
