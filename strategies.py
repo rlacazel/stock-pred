@@ -47,6 +47,7 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		self._last_price = None
 		self._instrument = instrument
 		self._count = 0
+		self._currAction = 0
 		self.entryTypeWhenAskPrediction = entryTypeWhenAskPrediction
 		if entryTypeWhenAskPrediction == PredictionFromType.Short:
 			self.marketOrder(self._instrument, -1)
@@ -54,7 +55,8 @@ class BaseStrategy(strategy.BacktestingStrategy):
 			self.marketOrder(self._instrument, 1)
 		d =  pd.DataFrame(columns=['date'], dtype=datetime.date)
 		v =  pd.DataFrame(columns=[self.__class__.__name__], dtype=int)
-		self._actions = pd.concat([d, v], axis=1)
+		# self._actions = pd.concat([d, v], axis=1)
+		self._actions = dict()
 		self._onGoingAcceptedOrder = dict()
 	
 	def onOrderUpdated(self, position):
@@ -67,12 +69,13 @@ class BaseStrategy(strategy.BacktestingStrategy):
 					self._onGoingAcceptedOrder[order.getId()] = str(date)
 					self.getBroker().cancelOrder(order)
 			self._onGoingAcceptedOrder[position.getId()] = str(date) + ' -> ' + getStrOrder(position.getAction(), shares)
-			print('Accepted  [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
+			self.debug('Accepted  [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
 		elif position.isFilled() and position.getId() in self._onGoingAcceptedOrder:
-			print('Activated [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
-			self._actions.loc[len(self._actions)] = [date,codeFromOrder(position.getAction(), shares)]  
+			self.debug('Activated [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
+			self._currAction = codeFromOrder(position.getAction(), shares)
+			self._actions[date] = self._currAction  
 		elif position.isCanceled() and position.getId() in self._onGoingAcceptedOrder:
-			print('Cancelled [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
+			self.debug('Cancelled [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
 			# raise Exception('MarketOrder cancelled')
 
 	def onExitCanceled(self, position):
@@ -85,7 +88,6 @@ class BaseStrategy(strategy.BacktestingStrategy):
 			self._init_price = bars[self._instrument].getPrice()
 		elif self.getFeed().eof():
 			self._last_price = bars[self._instrument].getPrice()
-		self._actions.loc[len(self._actions)] = [bars.getDateTime().date(), 0 if self._actions.empty else self._actions.loc[len(self._actions)-1][1]]
 	
 	def onFinish(self, bars):
 		shares = self.getBroker().getShares(self._instrument)
@@ -103,15 +105,14 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		return int(self.getBroker().getCash() * 0.9 / bars[self._instrument].getPrice())
 	
 	def onBars(self, bars):
-		# Wait for enough bars to be available to calculate SMA and RSI.
+		self._actions[bars.getDateTime().date()] = self._currAction
 		if not(self.availableData()) or (self.entryTypeWhenAskPrediction != PredictionFromType.NoPred and not self.getFeed().eof()): return
 		self.updateVarContext(bars)
 		self.strategies(bars)
 
-class SMAandRSI2(BaseStrategy):
+class AllStrat(BaseStrategy):
 	def __init__(self, feed, instrument, orders, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
-		super(SMAandRSI2, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
-		self.__prices = feed[instrument].getPriceDataSeries()
+		super(AllStrat, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__orders = orders
 
 	def availableData(self):
@@ -120,29 +121,30 @@ class SMAandRSI2(BaseStrategy):
 	def strategies(self, bars):
 		# If a position was not opened, check if we should enter a long position.
 		d = bars.getDateTime().date()
-		if d in self.__orders.index:
-			row = self.__orders.loc[d].tolist()
+		bar = bars[self._instrument]
+		if d in self.__orders:
+			row = self.__orders[d]
 			nb_buy_signal = sum([1 if r == 1 else 0 for r in row])
 			nb_sell_signal = sum([1 if r == -1 else 0 for r in row])
-			if self._longPos is not None:
-				if nb_buy_signal <= 0 and not self._longPos.exitActive() :
-					self._longPos.exitMarket()
-			elif self._shortPos is not None:
-				if nb_sell_signal <= 0 and not self._shortPos.exitActive() :
-					self._shortPos.exitMarket()
-			else:
-				if nb_buy_signal > 1:
-					self._longPos = self.enterLong(self._instrument, self.getNbSharesToTake(bars), True)
-				elif nb_sell_signal > 1:
-					self._shortPos = self.enterShort(self._instrument, self.getNbSharesToTake(bars), True)
+	
+			shares = self.getBroker().getShares(self._instrument)
+			if shares > 0 and nb_buy_signal <= 2:
+				self.marketOrder(self._instrument, -shares)
+			elif shares < 0 and nb_sell_signal <= 2:
+				self.marketOrder(self._instrument, -shares) # need pos value but its minus by minus equal plus
+			elif shares == 0:
+				if nb_buy_signal > 2:
+					self.marketOrder(self._instrument, self.getNbSharesToTake(bars))
+				elif nb_sell_signal > 2:
+					self.marketOrder(self._instrument, -self.getNbSharesToTake(bars))
 
-class BBands(BaseStrategy):
-	def __init__(self, feed, instrument, bBandsPeriod, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+class BBands(BaseStrategy): # params = [bBandsPeriod]
+	def __init__(self, feed, instrument, params, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(BBands, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
-		self.__bbands = bollinger.BollingerBands(feed[instrument].getCloseDataSeries(), bBandsPeriod, 2)
+		self.__bbands = bollinger.BollingerBands(feed[instrument].getCloseDataSeries(), params[0], 2)
 
-	def getBollingerBands(self):
-		return self.__bbands
+	def getIndicators(self):
+		return [['upper', self.__bbands.getUpperBand()], ['middle', self.__bbands.getMiddleBand()], ['lower', self.__bbands.getLowerBand()]]
 		
 	def availableData(self):
 		return self.__bbands.getUpperBand()[-1] is not None
@@ -161,15 +163,15 @@ class BBands(BaseStrategy):
 			self.marketOrder(self._instrument, -1*shares)	
 			
 			
-class SMACrossOver(BaseStrategy):
-	def __init__(self, feed, instrument, smaPeriod, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+class SMACrossOver(BaseStrategy):  # params = [smaPeriod]
+	def __init__(self, feed, instrument, params, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(SMACrossOver, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__prices = feed[instrument].getPriceDataSeries()
-		self.__sma = ma.SMA(self.__prices, smaPeriod)
+		self.__sma = ma.SMA(self.__prices, params[0])
 
-	def getSMA(self):
-		return self.__sma
-
+	def getIndicators(self):
+		return [['sma', self.__sma]]
+	
 	def availableData(self):
 		return self.__sma[-1] is not None
 		
@@ -181,24 +183,18 @@ class SMACrossOver(BaseStrategy):
 			self.marketOrder(self._instrument, -1*shares)
 
 			
-class RSI2(BaseStrategy):
-	def __init__(self, feed, instrument, entrySMA, exitSMA, rsiPeriod, overBoughtThreshold, overSoldThreshold, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+class RSI2(BaseStrategy): # params = [entrySMA, exitSMA, rsiPeriod, overBoughtThreshold, overSoldThreshold]
+	def __init__(self, feed, instrument, params, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(RSI2, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__priceDS = feed[instrument].getPriceDataSeries()
-		self.__entrySMA = ma.SMA(self.__priceDS, entrySMA)
-		self.__exitSMA = ma.SMA(self.__priceDS, exitSMA)
-		self.__rsi = rsi.RSI(self.__priceDS, rsiPeriod)
-		self.__overBoughtThreshold = overBoughtThreshold
-		self.__overSoldThreshold = overSoldThreshold
+		self.__entrySMA = ma.SMA(self.__priceDS, params[0])
+		self.__exitSMA = ma.SMA(self.__priceDS, params[1])
+		self.__rsi = rsi.RSI(self.__priceDS, params[2])
+		self.__overBoughtThreshold = params[3]
+		self.__overSoldThreshold = params[4]
 
-	def getEntrySMA(self):
-		return self.__entrySMA
-
-	def getExitSMA(self):
-		return self.__exitSMA
-
-	def getRSI(self):
-		return self.__rsi
+	def getIndicators(self):
+		return [['entry_sma', self.__entrySMA], ['exit_sma', self.__exitSMA], ['rsi', self.__rsi]]
 		
 	def availableData(self):
 		return self.__exitSMA[-1] is not None and self.__entrySMA[-1] is not None and self.__rsi[-1] is not None
