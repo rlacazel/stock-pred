@@ -47,7 +47,6 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		self._last_price = None
 		self._instrument = instrument
 		self._count = 0
-		self._currAction = 0
 		self.entryTypeWhenAskPrediction = entryTypeWhenAskPrediction
 		if entryTypeWhenAskPrediction == PredictionFromType.Short:
 			self.marketOrder(self._instrument, -1)
@@ -72,8 +71,7 @@ class BaseStrategy(strategy.BacktestingStrategy):
 			self.debug('Accepted  [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
 		elif position.isFilled() and position.getId() in self._onGoingAcceptedOrder:
 			self.debug('Activated [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
-			self._currAction = codeFromOrder(position.getAction(), shares)
-			self._actions[date] = self._currAction  
+			self._actions[date] = 1 if shares > 0 else -1 if shares < 0 else 0
 		elif position.isCanceled() and position.getId() in self._onGoingAcceptedOrder:
 			self.debug('Cancelled [' + str(position.getId()) + ']: ' + self._onGoingAcceptedOrder[position.getId()])
 			# raise Exception('MarketOrder cancelled')
@@ -94,7 +92,10 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		if self.entryTypeWhenAskPrediction != PredictionFromType.NoPred:
 			for order in self.getBroker().getActiveOrders(self._instrument):
 				print(str(bars.getDateTime().date()) + '->' + order.getInstrument() + ': ' + getStrOrder(order.getAction(), shares))	
-		
+
+	def getIndicators(self):
+		return []
+	
 	def getChangePrice(self):
 		return (self._last_price - self._init_price) / self._init_price * 100	
 
@@ -105,7 +106,9 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		return int(self.getBroker().getCash() * 0.9 / bars[self._instrument].getPrice())
 	
 	def onBars(self, bars):
-		self._actions[bars.getDateTime().date()] = self._currAction
+		shares = self.getBroker().getShares(self._instrument)
+		self._actions[bars.getDateTime().date()] = 1 if shares > 0 else -1 if shares < 0 else 0
+		
 		if not(self.availableData()) or (self.entryTypeWhenAskPrediction != PredictionFromType.NoPred and not self.getFeed().eof()): return
 		self.updateVarContext(bars)
 		self.strategies(bars)
@@ -114,6 +117,7 @@ class AllStrat(BaseStrategy):
 	def __init__(self, feed, instrument, orders, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(AllStrat, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__orders = orders
+		self._threshold = 3
 
 	def availableData(self):
 		return True
@@ -126,16 +130,17 @@ class AllStrat(BaseStrategy):
 			row = self.__orders[d]
 			nb_buy_signal = sum([1 if r == 1 else 0 for r in row])
 			nb_sell_signal = sum([1 if r == -1 else 0 for r in row])
+			# print(nb_sell_signal)
 	
 			shares = self.getBroker().getShares(self._instrument)
-			if shares > 0 and nb_buy_signal <= 2:
+			if shares > 0 and nb_buy_signal < self._threshold:
 				self.marketOrder(self._instrument, -shares)
-			elif shares < 0 and nb_sell_signal <= 2:
+			elif shares < 0 and nb_sell_signal < self._threshold:
 				self.marketOrder(self._instrument, -shares) # need pos value but its minus by minus equal plus
 			elif shares == 0:
-				if nb_buy_signal > 2:
+				if nb_buy_signal >= self._threshold:
 					self.marketOrder(self._instrument, self.getNbSharesToTake(bars))
-				elif nb_sell_signal > 2:
+				elif nb_sell_signal >= self._threshold:
 					self.marketOrder(self._instrument, -self.getNbSharesToTake(bars))
 
 class BBands(BaseStrategy): # params = [bBandsPeriod]
