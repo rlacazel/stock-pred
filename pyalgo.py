@@ -9,7 +9,7 @@ import pandas as pd
 from pyalgotrade.technical import ma
 import strategies
 import datetime
-from itertools import chain
+from itertools import chain, combinations
 from collections import defaultdict
 import collections
 import traceback
@@ -96,10 +96,10 @@ def run(strategy, symbol, plot = False):
 # sma.run()
 		
 # feed = yahoofeed.Feed()
-# file = fetch_data('AAPL')
+# file = fetch_data('MO')
 # feed.addBarsFromCSV("data", file)
 	
-# sma = strategies.SMACrossOver(feed, "data", 20, False, strategies.PredictionFromType.Nothing) # , True, True
+# sma = strategies.SMACrossOver(feed, "data", [20]) # , True, True
 # run(sma, 'data', True)
 # sma.run()
 	
@@ -127,9 +127,64 @@ def run(strategy, symbol, plot = False):
 	# strat = strategies.SMACrossOver(feed, s, 20) # , True, True
 	# return strat._actions.set_index('date')
 
-# exit()
+def predict_all():
+	for score in scores.keys():
+		predict(scores[score][0], score)
+
+def predict(strats_name, stock):
+	print('Prediction %s [%s]' % (stock, strats_name))
+	names = strats_name.split('_')
+	all_strats = []
+	weights = dict()
+	for strat_name in names:
+		strat = getStrats(strat_name, stock)
+		if strats_name == strat_name:
+			strat.setPredictionMode(strategies.PredictionFromType.Nothing)
+			strat.run()
+			# run(strat, stock, True)
+			return
+		else:
+			all_strats.append(strat)
+			weights[strat_name] = 1
 	
-def runAllStrat(strats, weights):
+	weights = dict()
+	for name in names:
+		weights[name] = 1
+	runAllStrat(all_strats, weights, stock)
+
+#SMACrossOver_RSI2
+def run_symbol(strats_name, stock):
+	names = strats_name.split('_')
+	all_strats = []
+	weights = dict()
+	for strat_name in names:
+		strat = getStrats(strat_name, stock)
+		# strat.setPredictionMode(strategies.PredictionFromType.Nothing)
+		# strat.run()
+		run(strat, stock)
+		all_strats.append(strat)
+		weights[strat_name] = 1
+	
+	for i in range(2,len(names)+1):
+		combi = list(combinations(names, i))
+		for c in combi:
+			weights = dict()
+			for strat_n in c:
+				weights[strat_n] = 1
+			runAllStrat(all_strats, weights, stock)
+		
+def getStrats(strat_name, stock):
+	feed = yahoofeed.Feed()
+	file = fetch_data(stock)
+	feed.addBarsFromCSV(stock, file)
+	if strat_name == 'SMACrossOver':
+		return strategies.SMACrossOver(feed, stock, [20])
+	elif strat_name == 'RSI2':
+		return strategies.RSI2(feed, stock, [154, 5, 2, 91, 18])
+	elif strat_name == 'BBands':
+		return strategies.BBands(feed, stock, [40])
+		
+def runAllStrat(strats, weights, stock):
 	orders = dict()
 	for key in list(chain(*[s._actions.keys() for s in strats])):
 		orders[key] = dict()
@@ -142,9 +197,13 @@ def runAllStrat(strats, weights):
 		# print(str(k) + ': ' + str(v))
 			
 	feed = yahoofeed.Feed()
-	feed.addBarsFromCSV(s, file)
-	all = strategies.AllStrat(feed, s, orders, weights)
-	run(all, s)
+	file = fetch_data(stock)
+	feed.addBarsFromCSV(stock, file)
+	all = strategies.AllStrat(feed, stock, orders, weights)
+	run(all, stock)
+
+# predict_all()
+# exit()
 
 count = 0
 failed_symbols = []
@@ -166,24 +225,8 @@ for s in list_symbols: #list_symbols
 		continue
 	
 	try:
-		feed = yahoofeed.Feed()
-		feed.addBarsFromCSV(s, file)
-		sma = strategies.SMACrossOver(feed, s, [20]) # , True, True
-		feed = yahoofeed.Feed()
-		feed.addBarsFromCSV(s, file)
-		rsi2 = strategies.RSI2(feed, s, [154, 5, 2, 91, 18]) # , True, True		
-		feed = yahoofeed.Feed()
-		feed.addBarsFromCSV(s, file)
-		bb = strategies.BBands(feed, s, [40]) # , True, True
-		
-		strats = [sma, rsi2, bb]
-		for strat in strats:
-			run(strat, s)
-		
-		runAllStrat(strats, {'BBands': 0, 'RSI2': 1, 'SMACrossOver': 1})
-		runAllStrat(strats, {'BBands': 1, 'RSI2': 0, 'SMACrossOver': 1})
-		runAllStrat(strats, {'BBands': 1, 'RSI2': 1, 'SMACrossOver': 0})
-		runAllStrat(strats, {'BBands': 1, 'RSI2': 1, 'SMACrossOver': 1})
+		# predict('SMACrossOver', s)
+		run_symbol('SMACrossOver_RSI2_BBands', s)
 		print()
 	except Exception as ex:
 		template = "An exception of type {0} occurred. Arguments: {1!r} \n"

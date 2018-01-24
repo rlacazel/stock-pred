@@ -58,6 +58,13 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		self._actions = dict()
 		self._onGoingAcceptedOrder = dict()
 	
+	def setPredictionMode(self, mode):
+		self.entryTypeWhenAskPrediction = mode
+		if self.entryTypeWhenAskPrediction == PredictionFromType.Short:
+			self.marketOrder(self._instrument, -1)
+		elif self.entryTypeWhenAskPrediction == PredictionFromType.Long:
+			self.marketOrder(self._instrument, 1)
+			
 	def getName(self):
 		return self.__class__.__name__
 	
@@ -176,7 +183,8 @@ class BBands(BaseStrategy): # params = [bBandsPeriod]
 		if shares == 0 and bar.getAdjClose() < lower:
 			shareToBuy = self.getNbSharesToTake(bars)
 			self.marketOrder(self._instrument, shareToBuy)
-			self.stopOrder(self._instrument, bar.getAdjClose()-2, -shareToBuy, True)
+			if self.entryTypeWhenAskPrediction == PredictionFromType.NoPred:
+				self.stopOrder(self._instrument, bar.getAdjClose()-2, -shareToBuy, True)
 		elif shares > 0 and bar.getAdjClose() > upper:
 			self.marketOrder(self._instrument, -1*shares)	
 			
