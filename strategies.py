@@ -58,6 +58,9 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		self._actions = dict()
 		self._onGoingAcceptedOrder = dict()
 	
+	def getName(self):
+		return self.__class__.__name__
+	
 	def onOrderUpdated(self, position):
 		# print(position.getId())
 		shares = self.getBroker().getShares(self._instrument)
@@ -114,39 +117,49 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		self.strategies(bars)
 
 class AllStrat(BaseStrategy):
-	def __init__(self, feed, instrument, orders, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
+	def __init__(self, feed, instrument, orders, weights, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(AllStrat, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__orders = orders
-		self._threshold = 3
+		self._weights = weights
 
+	def getName(self):
+		return '_'.join([k for k in self._weights.keys() if self._weights[k] > 0])
+			
 	def availableData(self):
 		return True
 
+	def getThreshold(self, val):
+		score = 0
+		tot_weight = sum(self._weights.values())
+		for strat, weight in self._weights.items():
+			score += weight*val[strat]
+		return score/tot_weight
+		
 	def strategies(self, bars):
 		# If a position was not opened, check if we should enter a long position.
 		d = bars.getDateTime().date()
 		bar = bars[self._instrument]
 		if d in self.__orders:
 			row = self.__orders[d]
-			nb_buy_signal = sum([1 if r == 1 else 0 for r in row])
-			nb_sell_signal = sum([1 if r == -1 else 0 for r in row])
-			# print(nb_sell_signal)
+			threshold = self.getThreshold(row)
+			# print(threshold)
 	
 			shares = self.getBroker().getShares(self._instrument)
-			if shares > 0 and nb_buy_signal < self._threshold:
+			if shares > 0 and threshold < 1:
 				self.marketOrder(self._instrument, -shares)
-			elif shares < 0 and nb_sell_signal < self._threshold:
+			elif shares < 0 and threshold > -1:
 				self.marketOrder(self._instrument, -shares) # need pos value but its minus by minus equal plus
 			elif shares == 0:
-				if nb_buy_signal >= self._threshold:
+				if threshold == 1:
 					self.marketOrder(self._instrument, self.getNbSharesToTake(bars))
-				elif nb_sell_signal >= self._threshold:
+				elif threshold == -1:
 					self.marketOrder(self._instrument, -self.getNbSharesToTake(bars))
 
 class BBands(BaseStrategy): # params = [bBandsPeriod]
 	def __init__(self, feed, instrument, params, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(BBands, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
-		self.__bbands = bollinger.BollingerBands(feed[instrument].getCloseDataSeries(), params[0], 2)
+		self.setUseAdjustedValues(True) # Raise an error is no adj value
+		self.__bbands = bollinger.BollingerBands(feed[instrument].getAdjCloseDataSeries(), params[0], 2)
 
 	def getIndicators(self):
 		return [['upper', self.__bbands.getUpperBand()], ['middle', self.__bbands.getMiddleBand()], ['lower', self.__bbands.getLowerBand()]]
@@ -160,11 +173,11 @@ class BBands(BaseStrategy): # params = [bBandsPeriod]
 		
 		shares = self.getBroker().getShares(self._instrument)
 		bar = bars[self._instrument]
-		if shares == 0 and bar.getClose() < lower:
+		if shares == 0 and bar.getAdjClose() < lower:
 			shareToBuy = self.getNbSharesToTake(bars)
 			self.marketOrder(self._instrument, shareToBuy)
-			self.stopOrder(self._instrument, bar.getClose()-5, -shareToBuy, True)
-		elif shares > 0 and bar.getClose() > upper:
+			self.stopOrder(self._instrument, bar.getAdjClose()-2, -shareToBuy, True)
+		elif shares > 0 and bar.getAdjClose() > upper:
 			self.marketOrder(self._instrument, -1*shares)	
 			
 			
