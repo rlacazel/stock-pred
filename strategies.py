@@ -64,6 +64,7 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		# Exit and stop loss orders.
 		self._takeProfitOrder = None
 		self._stopLossOrder = None
+		self._stopLossThreshold = 50
 		
 	def setPredictionMode(self, mode):
 		self.entryTypeWhenAskPrediction = mode
@@ -108,22 +109,22 @@ class BaseStrategy(strategy.BacktestingStrategy):
 			# Was the take profit order filled ?
 			if self._takeProfitOrder is not None and order.getId() == self._takeProfitOrder.getId():
 				entryPrice = order.getExecutionInfo().getPrice()
-				self.debug(str(self.getFeed().getCurrentBars().getDateTime()) + "Take profit order filled at" + str(entryPrice))
+				self.debug('Take profit [' + str(order.getId()) + ']: ' + str(self.getFeed().getCurrentBars().getDateTime().date()) + " at " + str(entryPrice))
 				self._takeProfitOrder = None
-				# self._signals[curr_date] = 0
-				# Cancel the other exit order to avoid entering a short position.
 				self.getBroker().cancelOrder(self._stopLossOrder)
 			# Was the stop loss order filled ?
 			elif self._stopLossOrder is not None and order.getId() == self._stopLossOrder.getId():
 				entryPrice = order.getExecutionInfo().getPrice()
-				self.debug(str(self.getFeed().getCurrentBars().getDateTime()) + "Stop loss order filled at" + str(entryPrice))
+				self.debug('Stop loss   [' + str(order.getId()) + ']: ' + str(self.getFeed().getCurrentBars().getDateTime().date()) + " at " + str(entryPrice))
 				self._stopLossOrder = None
-				# self._signals[curr_date] = 0
-				# Cancel the other exit order to avoid entering a short position.
 				self.getBroker().cancelOrder(self._takeProfitOrder)
 			else:
-				self.debug('Activated [' + str(order.getId()) + ']: ' + self._onGoingAcceptedOrder[order.getId()] + ' [shares=' + str(shares) + ']' )
-				self._signals[datePositionSubmitted] = 1 if shares > 0 else -1 if shares < 0 else 0
+				self.debug('Activated   [' + str(order.getId()) + ']: ' + self._onGoingAcceptedOrder[order.getId()] + ' [shares=' + str(shares) + ']' )
+				# self._signals[datePositionSubmitted] = 1 if shares > 0 else -1 if shares < 0 else 0
+				if shares == 0: # meaning we have sold out everything
+					self.cleanStopAndLimitOrder()
+				else:
+					self._signals[datePositionSubmitted] = 1 if shares > 0 else -1 if shares < 0 else 0
 			# print(datePositionSubmitted)
 			# print(self._actions[datePositionSubmitted])
 			# else: # It is the buy order that got filled.
@@ -164,16 +165,26 @@ class BaseStrategy(strategy.BacktestingStrategy):
 		return []
 	
 	def placeStopOrder(self, instr, stopPrice, share, goodTillCancelled):
+		self.cleanStopAndLimitOrder(self):
 		if self.entryTypeWhenAskPrediction == PredictionFromType.NoPred:
-			return self.stopOrder(instr, stopPrice, share, goodTillCancelled)
+			self._stopLossOrder = self.stopOrder(instr, stopPrice, share, goodTillCancelled)
 	
 	def placeLimitOrder(self, instr, limitPrice, share, goodTillCancelled):
+		self.cleanStopAndLimitOrder(self):
 		if self.entryTypeWhenAskPrediction == PredictionFromType.NoPred:
-			return self.limitOrder(instr, limitPrice, share, goodTillCancelled)
+			self._takeProfitOrder = self.limitOrder(instr, limitPrice, share, goodTillCancelled)
 	
-	def placeStopLimitOrder(self, instr, stopPrice, limitPrice, share, goodTillCancelled):
+	def cleanStopAndLimitOrder(self):
+		if self._takeProfitOrder is not None and self._takeProfitOrder.isActive():
+			self.getBroker().cancelOrder(self._takeProfitOrder)
+		if self._stopLossOrder is not None and self._stopLossOrder.isActive():
+			self.getBroker().cancelOrder(self._stopLossOrder)
+	
+	def placeStopAndLimitOrder(self, instr, price, share, goodTillCancelled):
 		if self.entryTypeWhenAskPrediction == PredictionFromType.NoPred:
-			self.stopLimitOrder(instr, stopPrice, limitPrice, share, goodTillCancelled)
+			self.cleanStopAndLimitOrder()
+			self._takeProfitOrder = self.limitOrder(instr, price + self._stopLossThreshold, share, goodTillCancelled)
+			self._stopLossOrder = self.stopOrder(instr, price - self._stopLossThreshold, share, goodTillCancelled)
 	
 	def getChangePrice(self):
 		return (self._last_price - self._init_price) / self._init_price * 100	
@@ -250,17 +261,18 @@ class BBands(BaseStrategy): # params = [bBandsPeriod]
 		if shares == 0 and price < lower:
 			shareToBuy = self.getNbSharesToTake(bars)
 			self.marketOrder(self._instrument, shareToBuy)
-			self._stopLossOrder = self.placeStopOrder(self._instrument, price-2, -shareToBuy, True)
+			self.placeStopOrder(self._instrument, price-2, -shareToBuy, True)
 		elif shares > 0 and price > upper:
 			self.marketOrder(self._instrument, -1*shares)	
 			
-class DoubleBottomBB(BaseStrategy): # params = [vwapWindowSize, threshold]
+class DoubleBottomBB(BaseStrategy): # params = [bands]
 	def __init__(self, feed, instrument, params, entryTypeWhenAskPrediction = PredictionFromType.NoPred):
 		super(DoubleBottomBB, self).__init__(feed, instrument, entryTypeWhenAskPrediction)
 		self.__bbands = bollinger.BollingerBands(feed[instrument].getPriceDataSeries(), params[0], 2)
 		self.__lows = feed[instrument].getLowDataSeries()
 		self.__volumes = feed[instrument].getVolumeDataSeries()
 		self._previousLowBelowBand = False
+		self._stopLossThreshold = 6 #override
 
 	def getIndicators(self):
 		return [['upper', self.__bbands.getUpperBand()], ['lower', self.__bbands.getLowerBand()], ['low', self.__lows]]
@@ -285,9 +297,7 @@ class DoubleBottomBB(BaseStrategy): # params = [vwapWindowSize, threshold]
 		if self._previousLowBelowBand and price < lower and diffVolum < -0.25 and shares == 0:
 			sharesToBuy = self.getNbSharesToTake(bars)
 			self.marketOrder(self._instrument, sharesToBuy)
-			self._takeProfitOrder = self.placeLimitOrder(self._instrument, price+5, -sharesToBuy, True)
-			self._stopLossOrder = self.placeStopOrder(self._instrument, price-5, -sharesToBuy, True)
-			# self.placeStopLimitOrder(self._instrument, price-1, price+1, -sharesToBuy, True)
+			self.placeStopAndLimitOrder(self._instrument, price, -sharesToBuy, True)
 		# elif shares > 0 and price > upper+5:
 			# self.marketOrder(self._instrument, -shares)	
 			
@@ -308,7 +318,9 @@ class SMACrossOver(BaseStrategy):  # params = [smaPeriod]
 	def strategies(self, bars):
 		shares = self.getBroker().getShares(self._instrument)
 		if shares == 0 and cross.cross_above(self.__prices, self.__sma) > 0:
-			self.marketOrder(self._instrument, self.getNbSharesToTake(bars))
+			sharesToBuy = self.getNbSharesToTake(bars)
+			self.marketOrder(self._instrument, sharesToBuy)
+			self.placeStopAndLimitOrder(self._instrument, self.__prices[-1], -sharesToBuy, True)
 		elif shares > 0 and cross.cross_below(self.__prices, self.__sma) > 0:
 			self.marketOrder(self._instrument, -1*shares)
 

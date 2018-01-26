@@ -206,14 +206,14 @@ def runCombinedStrat(strats, weights, stock, predict_mode = False):
 	else:
 		run(all, stock)
 
-for s in ['AKAM']: # ['AAPL']
-# for s in list_symbols: 
+# for s in ['AKAM']: # ['AAPL']
+for s in list_symbols: 
 	if s in failed: continue
 	strat = getStrats('DoubleBottomBB', s)
 	run(strat, s, True)
-	ordered = collections.OrderedDict(sorted(strat._signals.items(), key=lambda t: t[0]))
-	for k,v in ordered.items():
-		print(str(k) + ': ' + str(v))
+	# ordered = collections.OrderedDict(sorted(strat._signals.items(), key=lambda t: t[0]))
+	# for k,v in ordered.items():
+		# print(str(k) + ': ' + str(v))
 	
 # predict_all()
 exit()
