@@ -183,6 +183,8 @@ def getStrats(strat_name, stock, override_file = False, from_date = default_from
 		return strategies.BBands(feed, stock, [20])
 	elif strat_name == 'DoubleBottomBB':
 		return strategies.DoubleBottomBB(feed, stock, [20])
+	elif strat_name == 'ReversalBB':
+		return strategies.ReversalBB(feed, stock, [20])
 		
 def runCombinedStrat(strats, weights, stock, predict_mode = False):
 	orders = dict()
@@ -206,10 +208,10 @@ def runCombinedStrat(strats, weights, stock, predict_mode = False):
 	else:
 		run(all, stock)
 
-# for s in ['AKAM']: # ['AAPL']
+# for s in ['AES']: # ['AAPL']
 for s in list_symbols: 
 	if s in failed: continue
-	strat = getStrats('DoubleBottomBB', s)
+	strat = getStrats('BBands', s)
 	run(strat, s, True)
 	# ordered = collections.OrderedDict(sorted(strat._signals.items(), key=lambda t: t[0]))
 	# for k,v in ordered.items():
